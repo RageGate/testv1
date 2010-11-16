@@ -304,10 +304,16 @@ AC_CONFIG_FILES([
    src/shared/vmap/Makefile
    src/shared/SystemConfig.h
    src/game/Makefile
+   src/game/playerbot/Makefile
+   src/game/playerbot/config.h
+   src/game/playerbot/playerbot.conf.dist
    src/realmd/Makefile
    src/realmd/realmd.conf.dist
    src/mangosd/Makefile
    src/mangosd/mangosd.conf.dist
+   src/game/AuctionHouseBot/Makefile
+   src/game/AuctionHouseBot/config.h
+   src/game/AuctionHouseBot/ahbot.conf.dist
    src/bindings/Makefile
    src/bindings/universal/Makefile
 ])

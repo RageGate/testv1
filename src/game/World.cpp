@@ -23,6 +23,7 @@
 #include "World.h"
 #include "Database/DatabaseEnv.h"
 #include "Config/Config.h"
+#include "playerbot/config.h"
 #include "SystemConfig.h"
 #include "Log.h"
 #include "Opcodes.h"
@@ -59,7 +60,9 @@
 #include "WaypointManager.h"
 #include "GMTicketMgr.h"
 #include "Util.h"
+#include "AuctionHouseBot/AuctionHouseBot.h"
 #include "CharacterDatabaseCleaner.h"
+#include "Language.h"
 
 INSTANTIATE_SINGLETON_1( World );
 
@@ -75,6 +78,8 @@ float World::m_MaxVisibleDistanceForObject    = DEFAULT_VISIBILITY_DISTANCE;
 float World::m_MaxVisibleDistanceInFlight     = DEFAULT_VISIBILITY_DISTANCE;
 float World::m_VisibleUnitGreyDistance        = 0;
 float World::m_VisibleObjectGreyDistance      = 0;
+
+extern Config botConfig;
 
 /// World constructor
 World::World()
@@ -94,6 +99,9 @@ World::World()
 
     m_defaultDbcLocale = LOCALE_enUS;
     m_availableDbcLocaleMask = 0;
+	
+	// Initialize broadcaster nextId
+    m_nextId = 0;
 
     for(int i = 0; i < CONFIG_UINT32_VALUE_COUNT; ++i)
         m_configUint32Values[i] = 0;
@@ -749,7 +757,7 @@ void World::LoadConfigSettings(bool reload)
             sLog.outError("ClientCacheVersion can't be negative %d, ignored.", clientCacheId);
     }
 
-    setConfig(CONFIG_UINT32_INSTANT_LOGOUT, "InstantLogout", SEC_MODERATOR);
+    setConfig(CONFIG_UINT32_INSTANT_LOGOUT, "InstantLogout", SEC_TrialGM);
 
     setConfigMin(CONFIG_UINT32_GUILD_EVENT_LOG_COUNT, "Guild.EventLogRecordsCount", GUILD_EVENTLOG_MAX_RECORDS, GUILD_EVENTLOG_MAX_RECORDS);
     setConfigMin(CONFIG_UINT32_GUILD_BANK_EVENT_LOG_COUNT, "Guild.BankEventLogRecordsCount", GUILD_BANK_MAX_LOGS, GUILD_BANK_MAX_LOGS);
@@ -868,6 +876,11 @@ void World::LoadConfigSettings(bool reload)
     sLog.outString( "WORLD: VMap support included. LineOfSight:%i, getHeight:%i, indoorCheck:%i",
         enableLOS, enableHeight, getConfig(CONFIG_BOOL_VMAP_INDOOR_CHECK) ? 1 : 0);
     sLog.outString( "WORLD: VMap data directory is: %svmaps",m_dataPath.c_str());
+
+    // Broadcaster
+    setConfig(CONFIG_BOOL_BROADCAST_ENABLED     , "Broadcast.Enabled"   , false);
+    setConfig(CONFIG_UINT32_BROADCAST_INTERVAL  , "Broadcast.Interval"  , 60000);
+    setConfig(CONFIG_UINT32_BROADCAST_POSITION    , "Broadcast.Position"  , 1);
 }
 
 /// Initialize the World
@@ -1241,6 +1254,11 @@ void World::SetInitialWorldSettings()
     sLog.outString( "Loading Scripts text locales..." );    // must be after Load*Scripts calls
     sObjectMgr.LoadDbScriptStrings();
 
+    sLog.outString( "Loading VehicleData..." );
+    sObjectMgr.LoadVehicleData();
+    sLog.outString( "Loading VehicleSeatData..." );
+    sObjectMgr.LoadVehicleSeatData();
+
     sLog.outString( "Loading CreatureEventAI Texts...");
     sEventAIMgr.LoadCreatureEventAI_Texts(false);       // false, will checked in LoadCreatureEventAI_Scripts
 
@@ -1281,6 +1299,9 @@ void World::SetInitialWorldSettings()
                                                             //Update "uptime" table based on configuration entry in minutes.
     m_timers[WUPDATE_CORPSES].SetInterval(20*MINUTE*IN_MILLISECONDS);
     m_timers[WUPDATE_DELETECHARS].SetInterval(DAY*IN_MILLISECONDS); // check for chars to delete every day
+
+    // for AhBot
+    m_timers[WUPDATE_AHBOT].SetInterval(20*IN_MILLISECONDS); // every 20 sec
 
     //to set mailtimer to return mails every day between 4 and 5 am
     //mailtimer is increased when updating auctions
@@ -1328,6 +1349,22 @@ void World::SetInitialWorldSettings()
 
     // Delete all characters which have been deleted X days before
     Player::DeleteOldCharacters();
+
+    sLog.outString("Initialize AuctionHouseBot...");
+    auctionbot.Initialize();
+
+    //Get playerbot configuration file
+    if (!botConfig.SetSource(_PLAYERBOT_CONFIG))
+        sLog.outError("Playerbot: Unable to open configuration file. Database will be unaccessible. Configuration values will use default.");
+    else
+        sLog.outString("Playerbot: Using configuration file %s",_PLAYERBOT_CONFIG);
+
+    //Check playerbot config file version
+    if (botConfig.GetIntDefault("ConfVersion", 0) != PLAYERBOT_CONF_VERSION)
+        sLog.outError("Playerbot: Configuration file version doesn't match expected version. Some config variables may be wrong or missing.");
+
+    sLog.outString("Starting Autobroadcast system..." );
+    m_timers[WUPDATE_BROADCAST].SetInterval(m_configUint32Values[CONFIG_UINT32_BROADCAST_INTERVAL]);
 
     sLog.outString( "WORLD: World initialized" );
 
@@ -1424,6 +1461,13 @@ void World::Update(uint32 diff)
         sAuctionMgr.Update();
     }
 
+    /// <li> Handle AHBot operations
+    if (m_timers[WUPDATE_AHBOT].Passed())
+    {
+        auctionbot.Update();
+        m_timers[WUPDATE_AHBOT].Reset();
+    }
+
     /// <li> Handle session updates when the timer has passed
     if (m_timers[WUPDATE_SESSIONS].Passed())
     {
@@ -1496,6 +1540,13 @@ void World::Update(uint32 diff)
         uint32 nextGameEvent = sGameEventMgr.Update();
         m_timers[WUPDATE_EVENTS].SetInterval(nextGameEvent);
         m_timers[WUPDATE_EVENTS].Reset();
+    }
+
+    ///- Process autobroadcaster
+    if(getConfig(CONFIG_BOOL_BROADCAST_ENABLED) && m_timers[WUPDATE_BROADCAST].Passed())
+    {
+        m_timers[WUPDATE_BROADCAST].Reset();
+        SendBroadcast();
     }
 
     /// </ul>
@@ -2289,4 +2340,43 @@ bool World::configNoReload(bool reload, eConfigBoolValues index, char const* fie
         sLog.outError("%s option can't be changed at mangosd.conf reload, using current value (%s).", fieldname, getConfig(index) ? "'true'" : "'false'");
 
     return false;
+}
+
+// Broadcast a message
+void World::SendBroadcast()
+{
+    std::string message;
+
+    QueryResult *result;
+    if(m_nextId > 0)
+        result = LoginDatabase.PQuery("SELECT `text`, `next` FROM `broadcast_strings` WHERE `id` = %u;", m_nextId);
+    else
+        result = LoginDatabase.PQuery("SELECT `text`, `next` FROM `broadcast_strings` ORDER BY RAND();", m_nextId);
+
+    if(!result)
+        return;
+
+    Field *fields = result->Fetch();
+    m_nextId  = fields[1].GetUInt32();
+    message = fields[0].GetString();
+
+    delete result, fields;
+
+    if((getConfig(CONFIG_UINT32_BROADCAST_POSITION) & BROADCAST_LOCATION_CHAT) == BROADCAST_LOCATION_CHAT)
+        sWorld.SendWorldText(LANG_AUTO_BROADCAST, message.c_str());
+    if((getConfig(CONFIG_UINT32_BROADCAST_POSITION) & BROADCAST_LOCATION_TOP) == BROADCAST_LOCATION_TOP)
+    {
+        WorldPacket data(SMSG_NOTIFICATION, (message.size()+1));
+        data << message;
+        sWorld.SendGlobalMessage(&data);
+    }
+
+    if((getConfig(CONFIG_UINT32_BROADCAST_POSITION) & BROADCAST_LOCATION_IRC) == BROADCAST_LOCATION_IRC)
+#ifdef MANGCHAT_INSTALLED
+        sIRC.Send_IRC_Channel(sIRC._irc_chan[sIRC.anchn].c_str(), "\00311[Server]: " + message);
+#else
+        sLog.outError("AutoBroadcaster: You have IRC broadcasting enabled but we couldn't detect mangchat");
+#endif
+
+    sLog.outString("AutoBroadcast: '%s'",message.c_str());
 }
