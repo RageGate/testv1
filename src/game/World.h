@@ -79,7 +79,8 @@ enum WorldTimers
     WUPDATE_EVENTS      = 6,
     WUPDATE_DELETECHARS = 7,
     WUPDATE_AHBOT       = 8,
-    WUPDATE_COUNT       = 9
+	WUPDATE_BROADCAST   = 9,
+    WUPDATE_COUNT       = 10
 };
 
 /// Configuration elements
@@ -184,6 +185,11 @@ enum eConfigUInt32Values
     CONFIG_UINT32_CHARDELETE_KEEP_DAYS,
     CONFIG_UINT32_CHARDELETE_METHOD,
     CONFIG_UINT32_CHARDELETE_MIN_LEVEL,
+
+    /* Broadcaster */
+    CONFIG_UINT32_BROADCAST_INTERVAL,
+    CONFIG_UINT32_BROADCAST_POSITION,
+
     CONFIG_UINT32_VALUE_COUNT
 };
 
@@ -321,6 +327,8 @@ enum eConfigBoolValues
     CONFIG_BOOL_CLEAN_CHARACTER_DB,
     CONFIG_BOOL_VMAP_INDOOR_CHECK,
     CONFIG_BOOL_PET_UNSUMMON_AT_MOUNT,
+    CONFIG_BOOL_BROADCAST_ENABLED, // Broadcaster
+
     CONFIG_BOOL_VALUE_COUNT
 };
 
@@ -392,6 +400,13 @@ enum RealmZone
     REALM_ZONE_CN2_6_9       = 35,                          // basic-Latin at create, any at login
     REALM_ZONE_CN3_7         = 36,                          // basic-Latin at create, any at login
     REALM_ZONE_CN5_8         = 37                           // basic-Latin at create, any at login
+};
+
+enum BroadcastLocation
+{
+    BROADCAST_LOCATION_CHAT = 1,
+    BROADCAST_LOCATION_TOP = 2,
+    BROADCAST_LOCATION_IRC = 4,
 };
 
 /// Storage class for commands issued for delayed execution
@@ -672,6 +687,10 @@ class World
         std::string m_DBVersion;
         std::string m_CreatureEventAIVersion;
         std::string m_ScriptsVersion;
+
+        //Broadcaster
+        uint32 m_nextId;
+        void SendBroadcast();
 };
 
 extern uint32 realmID;
